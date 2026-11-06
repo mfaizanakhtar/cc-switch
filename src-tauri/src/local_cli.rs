@@ -11,6 +11,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use base64::Engine;
 use serde_json::{json, Value};
 use tauri::Manager;
 
@@ -20,6 +21,18 @@ use crate::store::AppState;
 
 fn socket_path() -> PathBuf {
     crate::config::get_app_config_dir().join("cli.sock")
+}
+
+fn live_codex_email() -> Option<String> {
+    let auth = std::fs::read_to_string(crate::codex_config::get_codex_auth_path()).ok()?;
+    let value: Value = serde_json::from_str(&auth).ok()?;
+    let id_token = value.pointer("/tokens/id_token")?.as_str()?;
+    let payload = id_token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    claims.get("email")?.as_str().map(str::to_owned)
 }
 
 fn response(app: &tauri::AppHandle, request: &Value) -> Result<Value, String> {
@@ -45,12 +58,20 @@ fn response(app: &tauri::AppHandle, request: &Value) -> Result<Value, String> {
                 .db
                 .get_current_provider("codex")
                 .map_err(|e| e.to_string())?;
+            let mode = crate::mode::current::mode_state(&AppType::Codex);
+            let in_use = crate::mode::current::provider_for(
+                state.db.as_ref(),
+                &AppType::Codex,
+                crate::mode::current::Purpose::InUse,
+            )
+            .map_err(|_| "Cannot read active provider".to_string())?;
             Ok(
-                json!({"providers": providers.values().map(|provider| json!({
+                json!({"mode": if mode.is_proxy() { "routing" } else { "direct" }, "liveCodexLogin": live_codex_email(), "providers": providers.values().map(|provider| json!({
                 "id": provider.id,
                 "name": provider.name,
                 "accountId": provider.meta.as_ref().and_then(|meta| meta.managed_account_id_for("codex_oauth")),
-                "active": current.as_deref() == Some(provider.id.as_str())
+                "active": in_use.as_deref() == Some(provider.id.as_str()),
+                "directDefault": current.as_deref() == Some(provider.id.as_str())
             })).collect::<Vec<_>>() }),
             )
         }
@@ -61,7 +82,7 @@ fn response(app: &tauri::AppHandle, request: &Value) -> Result<Value, String> {
                 .filter(|id| !id.is_empty() && id.len() <= 128)
                 .ok_or_else(|| "A provider ID is required".to_string())?;
             ProviderService::switch(state.inner(), AppType::Codex, id)
-                .map_err(|e| e.to_string())?;
+                .map_err(|_| "Provider switch failed; inspect CC Switch UI".to_string())?;
             Ok(json!({"selected": id}))
         }
         Some("limits") => {
@@ -167,7 +188,8 @@ pub fn run(args: &[String]) -> i32 {
             return 1;
         }
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(40)));
+    // Four sequential account quota queries can exceed one network timeout.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(180)));
     if writeln!(stream, "{request}").is_err() {
         eprintln!("Could not send CLI command");
         return 1;

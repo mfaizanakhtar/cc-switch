@@ -495,12 +495,12 @@ On Linux and macOS, the running CC Switch desktop app also accepts a small local
 
 ```sh
 cc-switch codex-cli accounts             # Managed account IDs and login names
-cc-switch codex-cli providers            # Codex cards, account bindings, active card
+cc-switch codex-cli providers            # Codex cards, active route, direct default, live login
 cc-switch codex-cli limits               # Per-account usage windows and reset times
 cc-switch codex-cli use <provider-id>    # Select a card through the normal switch path
 ```
 
-The commands return JSON. `use` changes only the provider card you explicitly name; it does not rotate accounts automatically. The desktop app must be running under the same OS user. The local socket is restricted to that user, and neither account tokens nor credential files are returned by the CLI. Limit queries may refresh a managed account's access token through CC Switch's existing code; unavailable limits are shown as unavailable.
+The commands return JSON. `use` changes only the provider card you explicitly name; it does not rotate accounts automatically. `providers` reports the active route in Routing mode, the saved Direct default, and the live Codex login so an out-of-band `codex login` is visible. The desktop app must be running under the same OS user. The local socket is restricted to that user, and neither account tokens nor credential files are returned by the CLI. Limit queries may refresh a managed account's access token through CC Switch's existing code; unavailable limits are shown as unavailable.
 
 Note: official subscriptions use the tool's own login and don't go through local routing. Official providers can't be selected in Routing mode (Codex's OpenAI Official cards are the exception); switch back to Direct first.
 

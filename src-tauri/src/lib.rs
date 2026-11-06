@@ -26,11 +26,11 @@ mod jsonc_document;
 mod kimi_config;
 mod kimi_session;
 mod lightweight;
-#[cfg(unix)]
-pub mod local_cli;
 #[cfg(target_os = "linux")]
 mod linux_fix;
 pub mod live;
+#[cfg(unix)]
+pub mod local_cli;
 mod mcode_config;
 mod mcp;
 pub mod mode;

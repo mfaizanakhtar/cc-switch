@@ -491,6 +491,17 @@ In CC Switch, the provider lists for Claude Code, Claude Desktop, Codex, Gemini 
 
 For Codex, you can also sign in to multiple ChatGPT accounts inside CC Switch via "Sign in with ChatGPT" and choose an "Account to use" for each **OpenAI Official** card, so switching between multiple Plus, Pro, or Team accounts takes one click; cards set to "Follow Codex login" keep using the Codex CLI's own login.
 
+On Linux and macOS, the running CC Switch desktop app also accepts a small local CLI for these managed accounts:
+
+```sh
+cc-switch codex-cli accounts             # Managed account IDs and login names
+cc-switch codex-cli providers            # Codex cards, account bindings, active card
+cc-switch codex-cli limits               # Per-account usage windows and reset times
+cc-switch codex-cli use <provider-id>    # Select a card through the normal switch path
+```
+
+The commands return JSON. `use` changes only the provider card you explicitly name; it does not rotate accounts automatically. The desktop app must be running under the same OS user. The local socket is restricted to that user, and neither account tokens nor credential files are returned by the CLI. Limit queries may refresh a managed account's access token through CC Switch's existing code; unavailable limits are shown as unavailable.
+
 Note: official subscriptions use the tool's own login and don't go through local routing. Official providers can't be selected in Routing mode (Codex's OpenAI Official cards are the exception); switch back to Direct first.
 
 </details>

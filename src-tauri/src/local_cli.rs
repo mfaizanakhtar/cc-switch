@@ -109,8 +109,55 @@ fn response(app: &tauri::AppHandle, request: &Value) -> Result<Value, String> {
             }
             Ok(json!({"accounts": accounts}))
         }
+        Some("rotation-status") => {
+            Ok(json!({"status": crate::services::codex_account_rotation::status()}))
+        }
+        Some("rotation-select") => {
+            let id = request
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 128)
+                .ok_or_else(|| "A rotation account ID is required".to_string())?;
+            let settings = crate::settings::get_settings();
+            if !settings
+                .codex_account_rotation
+                .accounts
+                .iter()
+                .any(|account| account.account_id == id)
+            {
+                return Err("That account is not in the rotation pool".to_string());
+            }
+            let until = now_millis()
+                + (settings.codex_account_rotation.manual_override_seconds as i64) * 1000;
+            crate::services::codex_account_rotation::set_manual_account(
+                Some(id.to_string()),
+                until,
+            );
+            let _ = tauri::async_runtime::block_on(
+                crate::services::codex_account_rotation::run_once(app),
+            );
+            Ok(json!({"status": crate::services::codex_account_rotation::status()}))
+        }
+        Some("rotation-pause") | Some("rotation-resume") => {
+            let paused = request.get("op").and_then(Value::as_str) == Some("rotation-pause");
+            let mut settings = crate::settings::get_settings();
+            settings.codex_account_rotation.manual_paused = paused;
+            crate::settings::update_settings(settings)
+                .map_err(|error| error.to_string())?;
+            let _ = tauri::async_runtime::block_on(
+                crate::services::codex_account_rotation::run_once(app),
+            );
+            Ok(json!({"status": crate::services::codex_account_rotation::status()}))
+        }
         _ => Err("Unsupported command".to_string()),
     }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub fn start(app: tauri::AppHandle) {
@@ -172,12 +219,22 @@ pub fn start(app: tauri::AppHandle) {
 
 pub fn run(args: &[String]) -> i32 {
     let request = match args {
-        [command] if command == "accounts" || command == "providers" || command == "limits" => {
+        [command]
+            if command == "accounts"
+                || command == "providers"
+                || command == "limits"
+                || command == "rotation-status"
+                || command == "rotation-pause"
+                || command == "rotation-resume" =>
+        {
             json!({"op": command})
         }
         [command, id] if command == "use" => json!({"op": "use", "id": id}),
+        [command, id] if command == "rotation-select" => {
+            json!({"op": "rotation-select", "id": id})
+        }
         _ => {
-            eprintln!("Usage: cc-switch codex-cli accounts|providers|limits|use <provider-id>");
+            eprintln!("Usage: cc-switch codex-cli accounts|providers|limits|use <provider-id>|rotation-status|rotation-select <account-id>|rotation-pause|rotation-resume");
             return 2;
         }
     };

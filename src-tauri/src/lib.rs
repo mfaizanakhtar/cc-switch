@@ -1353,6 +1353,8 @@ pub fn run() {
                 log::info!("✓ CodexOAuthManager initialized");
             }
 
+            crate::services::codex_account_rotation::spawn(app.handle().clone());
+
             // 初始化 xAI OAuthManager (Grok API 反代)
             {
                 use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
@@ -1660,6 +1662,10 @@ pub fn run() {
             commands::get_subscription_quota,
             commands::get_codex_oauth_quota,
             commands::get_codex_oauth_models,
+            commands::get_codex_rotation_status,
+            commands::run_codex_rotation_now,
+            commands::set_codex_rotation_paused,
+            commands::set_codex_rotation_serving_account,
             commands::get_xai_oauth_models,
             commands::get_xai_oauth_quota,
             commands::get_coding_plan_quota,

@@ -2,6 +2,7 @@ pub mod agy_account;
 pub mod backup_storage;
 pub mod balance;
 pub mod claude_account;
+pub mod codex_account_rotation;
 pub mod codex_oauth_models;
 pub mod codex_session_compression;
 pub mod coding_plan;

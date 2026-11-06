@@ -545,6 +545,15 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub codex_copilot_api_format: Option<String>,
+    /// Stable Codex official card whose proxy requests use the account rotation pool.
+    /// The card's bound account authenticates the client; the proxy swaps the
+    /// upstream account to the selected serving account without rewriting auth.json.
+    #[serde(
+        rename = "codexRotationPool",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub codex_rotation_pool: Option<bool>,
     /// 通用认证绑定（provider_config / managed_account）
     ///
     /// 新代码应只写入该字段；githubAccountId 仅保留兼容读取。

@@ -1451,9 +1451,19 @@ impl RequestForwarder {
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
         let codex_stack_request = self.stack_request && matches!(app_type, AppType::Codex);
-        let mut quota_token = None;
+        let mut quota_token: Option<String> = None;
+
+        let rotation_selected = if codex_official_auth_passthrough {
+            crate::services::codex_account_rotation::is_rotation_provider(provider)
+                .then(crate::services::codex_account_rotation::selected_account_id)
+                .flatten()
+        } else {
+            None
+        };
+        let mut rotation_active = rotation_selected.is_some();
 
         if codex_official_auth_passthrough {
+            let _rotation_activity = crate::services::codex_account_rotation::ActivityGuard::start();
             let (expected_chatgpt_account_id, managed_session_matches) = match provider
                 .meta
                 .as_ref()
@@ -1499,8 +1509,10 @@ impl RequestForwarder {
                         "Codex official route requires a bearer token".to_string(),
                     )
                 })?;
-                super::codex_quota_protection::admit(token, headers).await?;
-                quota_token = Some(token);
+                if !rotation_active {
+                    super::codex_quota_protection::admit(token, headers).await?;
+                    quota_token = Some(token.to_string());
+                }
             }
         }
 
@@ -2209,58 +2221,87 @@ impl RequestForwarder {
                     let codex_state = app_handle.state::<CodexOAuthState>();
                     let codex_auth = &codex_state.0;
 
-                    // 从 provider.meta 获取关联的 ChatGPT 账号 ID
-                    let account_id = provider
+                    // The anchor account authenticates the client; the selected
+                    // serving account is used for the upstream credential.
+                    let anchor_account_id = provider
                         .meta
                         .as_ref()
                         .and_then(|m| m.managed_account_id_for("codex_oauth"));
-
-                    let resolved_account_id = match account_id {
-                        Some(id) => Some(id),
-                        None => codex_auth.default_account_id().await,
+                    let use_rotation = rotation_active;
+                    let selected_serving_account = if use_rotation {
+                        rotation_selected.clone()
+                    } else {
+                        None
                     };
+                    let mut candidates: Vec<String> = Vec::new();
+                    if let Some(selected) = selected_serving_account.clone() {
+                        candidates.push(selected);
+                    }
+                    if let Some(anchor) = anchor_account_id {
+                        if !candidates.contains(&anchor) {
+                            candidates.push(anchor);
+                        }
+                    }
+                    if candidates.is_empty() {
+                        if let Some(default) = codex_auth.default_account_id().await {
+                            candidates.push(default);
+                        }
+                    }
+                    if candidates.is_empty() {
+                        return Err(ProxyError::AuthError(
+                            "Codex OAuth 认证失败: 无可用的 ChatGPT 账号".to_string(),
+                        ));
+                    }
 
-                    let token_result = match &resolved_account_id {
-                        Some(id) => {
-                            log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
-                            codex_auth.get_valid_token_for_account(id).await
+                    let mut last_error: Option<String> = None;
+                    let mut resolved: Option<(String, String, String)> = None;
+                    for id in candidates {
+                        log::debug!("[CodexOAuth] 使用指定账号 {id} 获取 token");
+                        match codex_auth.get_valid_token_for_account(&id).await {
+                            Ok(token) => {
+                                match codex_auth.chatgpt_account_id_for_account(&id).await {
+                                    Ok(workspace_id) => {
+                                        resolved = Some((id, token, workspace_id));
+                                        break;
+                                    }
+                                    Err(error) => {
+                                        last_error = Some(format!(
+                                            "Codex OAuth 账号解析失败: {error}"
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                last_error =
+                                    Some(format!("Codex OAuth 认证失败: {error}"));
+                            }
                         }
-                        None => {
-                            return Err(ProxyError::AuthError(
-                                "Codex OAuth 认证失败: 无可用的 ChatGPT 账号".to_string(),
-                            ));
-                        }
+                    }
+                    let Some((resolved_account_id, token, workspace_id)) = resolved else {
+                        let message = last_error
+                            .unwrap_or_else(|| "Codex OAuth 认证失败".to_string());
+                        log::error!("[CodexOAuth] 获取 access_token 失败: {message}");
+                        return Err(ProxyError::AuthError(message));
                     };
-
-                    match token_result {
-                        Ok(token) => {
-                            auth = AuthInfo::new(token, AuthStrategy::CodexOAuth);
-                            should_send_codex_oauth_session_headers = true;
-                            // 本地账号 ID 只用于绑定；请求头必须使用上游 workspace ID。
-                            codex_oauth_account_id = match resolved_account_id.as_deref() {
-                                Some(id) => Some(
-                                    codex_auth
-                                        .chatgpt_account_id_for_account(id)
-                                        .await
-                                        .map_err(|e| {
-                                            ProxyError::AuthError(format!(
-                                                "Codex OAuth 账号解析失败: {e}"
-                                            ))
-                                        })?,
-                                ),
-                                None => None,
-                            };
-                            log::debug!(
-                                "[CodexOAuth] 成功获取 access_token (account={})",
-                                codex_oauth_account_id.as_deref().unwrap_or("default")
-                            );
-                        }
-                        Err(e) => {
-                            log::error!("[CodexOAuth] 获取 access_token 失败: {e}");
-                            return Err(ProxyError::AuthError(format!(
-                                "Codex OAuth 认证失败: {e}"
-                            )));
-                        }
+                    if use_rotation
+                        && selected_serving_account.as_deref() != Some(resolved_account_id.as_str())
+                    {
+                        log::warn!(
+                            "[CodexOAuth] selected rotation account unavailable; falling back to anchor {resolved_account_id}"
+                        );
+                        rotation_active = false;
+                    }
+                    auth = AuthInfo::new(token.clone(), AuthStrategy::CodexOAuth);
+                    should_send_codex_oauth_session_headers = true;
+                    // Local account ID is only for binding; upstream uses the workspace ID.
+                    codex_oauth_account_id = Some(workspace_id);
+                    log::debug!(
+                        "[CodexOAuth] 成功获取 access_token (account={})",
+                        codex_oauth_account_id.as_deref().unwrap_or("default")
+                    );
+                    if use_rotation {
+                        super::codex_quota_protection::admit(&token, headers).await?;
+                        quota_token = Some(token);
                     }
                 } else {
                     log::error!("[CodexOAuth] AppHandle 不可用");
@@ -2524,7 +2565,9 @@ impl RequestForwarder {
                 // Codex send the active ChatGPT authorization, which must reach
                 // the official upstream unchanged. Other credential headers
                 // are still discarded.
-                if codex_official_auth_passthrough && key_str.eq_ignore_ascii_case("authorization")
+                if codex_official_auth_passthrough
+                    && !rotation_active
+                    && key_str.eq_ignore_ascii_case("authorization")
                 {
                     saw_auth = true;
                     ordered_headers.append(key.clone(), value.clone());
@@ -2862,7 +2905,7 @@ impl RequestForwarder {
         // Official responses (errors included) carry the account's usage headers;
         // they feed the next request's quota check without an extra lookup.
         if let Some(token) = quota_token {
-            super::codex_quota_protection::observe_response(token, headers, response.headers());
+            super::codex_quota_protection::observe_response(&token, headers, response.headers());
         }
 
         // 检查响应状态

@@ -26,6 +26,8 @@ mod jsonc_document;
 mod kimi_config;
 mod kimi_session;
 mod lightweight;
+#[cfg(unix)]
+pub mod local_cli;
 #[cfg(target_os = "linux")]
 mod linux_fix;
 pub mod live;
@@ -1321,6 +1323,8 @@ pub fn run() {
             );
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
+            #[cfg(unix)]
+            crate::local_cli::start(app.handle().clone());
             app.manage(services::kimi_oauth::KimiOAuthManager::default());
 
             // 初始化 SkillService

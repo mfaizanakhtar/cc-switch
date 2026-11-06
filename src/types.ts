@@ -174,6 +174,8 @@ export interface LocalProxyRequestOverrides {
 
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
+  // Marks the stable Codex card whose proxy requests use the account rotation pool
+  codexRotationPool?: boolean;
   // 自定义端点：以 URL 为键，值为端点信息
   custom_endpoints?: Record<string, CustomEndpoint>;
   // 是否在切换/同步到 live 时应用通用配置片段
@@ -458,6 +460,7 @@ export interface Settings {
     fiveHourThreshold: number;
     weeklyThreshold: number;
   };
+  codexAccountRotation?: CodexAccountRotation;
   // Run official Codex under the shared "custom" provider id so future
   // sessions share one resume-history bucket with third-party providers
   unifyCodexSessionHistory?: boolean;
@@ -1094,4 +1097,64 @@ export interface HermesMemoryLimits {
   user: number;
   memoryEnabled: boolean;
   userEnabled: boolean;
+}
+
+export interface CodexAccountRotation {
+  enabled: boolean;
+  anchorProviderId: string;
+  pollSeconds: number;
+  fastPollSeconds: number;
+  nearCapMargin: number;
+  manualOverrideSeconds: number;
+  manualPaused: boolean;
+  accounts: CodexRotationAccount[];
+  heartbeat: CodexRotationHeartbeat;
+}
+
+export interface CodexRotationAccount {
+  accountId: string;
+  login: string;
+  priority: number;
+  fiveHourMinRemaining: number;
+  weeklyMinRemaining: number;
+  heartbeatEligible: boolean;
+}
+
+export interface CodexRotationHeartbeat {
+  enabled: boolean;
+  target: string;
+  idleMinutes: number;
+  repeatMinutes: number;
+}
+
+export interface CodexRotationAccountStatus {
+  accountId: string;
+  login: string;
+  priority: number;
+  fiveHourUsed: number | null;
+  fiveHourReset: number | null;
+  weeklyUsed: number | null;
+  weeklyReset: number | null;
+  fiveHourMinRemaining: number;
+  weeklyMinRemaining: number;
+  eligible: boolean;
+  reauthRequired: boolean;
+  providerId: string | null;
+}
+
+export interface CodexRotationStatus {
+  running: boolean;
+  enabled: boolean;
+  autoPaused: boolean;
+  manualPaused: boolean;
+  anchorProviderId: string | null;
+  anchorLogin: string | null;
+  selectedAccountId: string | null;
+  selectedLogin: string | null;
+  nextReset: number | null;
+  lastDecisionAt: number | null;
+  lastSwitchAt: number | null;
+  lastHeartbeatAt: number | null;
+  lastError: string | null;
+  accounts: CodexRotationAccountStatus[];
 }

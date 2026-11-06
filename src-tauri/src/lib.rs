@@ -1666,6 +1666,7 @@ pub fn run() {
             commands::run_codex_rotation_now,
             commands::set_codex_rotation_paused,
             commands::set_codex_rotation_serving_account,
+            commands::set_codex_rotation_anchor,
             commands::get_xai_oauth_models,
             commands::get_xai_oauth_quota,
             commands::get_coding_plan_quota,

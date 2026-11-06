@@ -20,6 +20,7 @@ use crate::store::AppState;
 static SELECTED_ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
 static MANUAL_UNTIL: AtomicI64 = AtomicI64::new(0);
 static LAST_REQUEST_AT: AtomicI64 = AtomicI64::new(0);
+static LAST_HEARTBEAT_AT: AtomicI64 = AtomicI64::new(0);
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static STATUS: OnceLock<Mutex<RotationStatus>> = OnceLock::new();
 static RUNTIME: OnceLock<Mutex<RotationRuntime>> = OnceLock::new();
@@ -284,6 +285,7 @@ pub struct RotationAccountStatus {
 }
 
 pub fn spawn(app: tauri::AppHandle) {
+    LAST_REQUEST_AT.store(now_millis(), Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
         update_status(|status| status.running = true);
         loop {
@@ -475,6 +477,8 @@ pub(crate) async fn run_once(app: &tauri::AppHandle) -> Result<u64, String> {
             .map(|account| account.login.clone())
     });
 
+    maybe_heartbeat(&config, selected.as_deref(), decision.paused, now).await;
+
     update_status(|status| {
         status.enabled = true;
         status.auto_paused = decision.paused;
@@ -487,6 +491,8 @@ pub(crate) async fn run_once(app: &tauri::AppHandle) -> Result<u64, String> {
         status.last_decision_at = Some(now);
         status.accounts = account_statuses;
         status.last_error = None;
+        status.last_heartbeat_at = (LAST_HEARTBEAT_AT.load(Ordering::SeqCst) > 0)
+            .then(|| LAST_HEARTBEAT_AT.load(Ordering::SeqCst));
     });
 
     emit_status(app);
@@ -496,6 +502,90 @@ pub(crate) async fn run_once(app: &tauri::AppHandle) -> Result<u64, String> {
     } else {
         poll_seconds
     })
+}
+
+async fn maybe_heartbeat(
+    config: &CodexAccountRotation,
+    selected: Option<&str>,
+    paused: bool,
+    now: i64,
+) {
+    if !config.heartbeat.enabled || config.manual_paused || paused {
+        return;
+    }
+    let Some(selected) = selected else { return };
+    let Some(rule) = config
+        .accounts
+        .iter()
+        .find(|account| account.account_id == selected)
+    else {
+        return;
+    };
+    if !rule.heartbeat_eligible {
+        return;
+    }
+    if config.heartbeat.target != "preferred" && config.heartbeat.target != selected {
+        return;
+    }
+    if !is_idle_for(config.heartbeat.idle_minutes.saturating_mul(60)) {
+        return;
+    }
+    let last = LAST_HEARTBEAT_AT.load(Ordering::SeqCst);
+    let repeat_ms = (config.heartbeat.repeat_minutes as i64) * 60 * 1000;
+    if last > 0 && now.saturating_sub(last) < repeat_ms {
+        return;
+    }
+
+    let cwd = std::path::PathBuf::from("/home/ai/workspaces/rotation-heartbeat");
+    if let Err(error) = std::fs::create_dir_all(&cwd) {
+        log::warn!("[CodexRotation] heartbeat workspace failed: {error}");
+        return;
+    }
+    let codex = if std::path::Path::new("/usr/local/bin/codex").exists() {
+        "/usr/local/bin/codex"
+    } else {
+        "codex"
+    };
+    let mut command = tokio::process::Command::new(codex);
+    command
+        .args([
+            "exec",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--color",
+            "never",
+            "Reply with exactly OK",
+        ])
+        .current_dir(&cwd)
+        .env("HOME", "/home/ai")
+        .env("CODEX_HOME", "/home/ai/.codex")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+
+    match tokio::time::timeout(Duration::from_secs(120), command.status()).await {
+        Ok(Ok(status)) if status.success() => {
+            LAST_HEARTBEAT_AT.store(now, Ordering::SeqCst);
+            log::info!(
+                "[CodexRotation] heartbeat started a window for serving account {selected}"
+            );
+        }
+        Ok(Ok(status)) => {
+            // Retry sooner than a full repeat interval after a failure.
+            LAST_HEARTBEAT_AT.store(now - repeat_ms + 5 * 60 * 1000, Ordering::SeqCst);
+            log::warn!("[CodexRotation] heartbeat exited with {status} for {selected}");
+        }
+        Ok(Err(error)) => {
+            LAST_HEARTBEAT_AT.store(now - repeat_ms + 5 * 60 * 1000, Ordering::SeqCst);
+            log::warn!("[CodexRotation] heartbeat could not start codex: {error}");
+        }
+        Err(_) => {
+            LAST_HEARTBEAT_AT.store(now - repeat_ms + 5 * 60 * 1000, Ordering::SeqCst);
+            log::warn!("[CodexRotation] heartbeat timed out for {selected}");
+        }
+    }
 }
 
 fn emit_status(app: &tauri::AppHandle) {

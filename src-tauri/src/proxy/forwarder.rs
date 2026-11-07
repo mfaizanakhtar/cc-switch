@@ -173,6 +173,7 @@ fn validate_codex_official_authorization(
     provider: &Provider,
     expected_chatgpt_account_id: Option<&str>,
     managed_session_matches: Option<bool>,
+    rotation_provider: bool,
 ) -> Result<(), ProxyError> {
     let authorization = headers
         .get(http::header::AUTHORIZATION)
@@ -188,6 +189,13 @@ fn validate_codex_official_authorization(
             "已切换到 OpenAI 官方供应商，但这个请求仍按第三方供应商的配置发出。如果这是切换前用第三方供应商创建的旧会话，它会一直沿用原供应商，重启也无效，请新建会话继续；否则请重启 Codex 以加载官方登录配置".to_string(),
         )),
         Some(_) => {
+            // A rotation anchor accepts a separate OAuth grant for the same
+            // account (for example Hermes) because the proxy uses the selected
+            // serving account for the upstream credential. The listener is
+            // loopback-only.
+            if rotation_provider {
+                return Ok(());
+            }
             let managed_account_id = provider
                 .meta
                 .as_ref()
@@ -1454,10 +1462,9 @@ impl RequestForwarder {
         let mut quota_token: Option<String> = None;
         let mut codex_oauth_account_id: Option<String> = None;
 
-        let rotation_selected = if codex_official_auth_passthrough {
-            crate::services::codex_account_rotation::is_rotation_provider(provider)
-                .then(crate::services::codex_account_rotation::selected_account_id)
-                .flatten()
+        let rotation_provider = crate::services::codex_account_rotation::is_rotation_provider(provider);
+        let rotation_selected = if codex_official_auth_passthrough && rotation_provider {
+            crate::services::codex_account_rotation::selected_account_id()
         } else {
             None
         };
@@ -1504,6 +1511,7 @@ impl RequestForwarder {
                 provider,
                 expected_chatgpt_account_id.as_deref(),
                 managed_session_matches,
+                rotation_provider,
             )?;
             if rotation_active {
                 let selected = rotation_selected.clone();
@@ -5832,7 +5840,7 @@ mod tests {
         let mut provider = test_provider_with_type(None);
         provider.id = "codex-official".to_string();
         provider.category = Some("official".to_string());
-        let error = validate_codex_official_authorization(&headers, &provider, None, None)
+        let error = validate_codex_official_authorization(&headers, &provider, None, None, false)
             .expect_err("stale placeholder must be rejected");
         assert!(matches!(
             error,
@@ -5866,6 +5874,7 @@ mod tests {
             &provider,
             Some("workspace-shared"),
             Some(false),
+            false,
         )
         .expect_err("another user's bearer in the same workspace must be rejected");
         assert!(matches!(error, ProxyError::AuthError(message) if message.contains("重启 Codex")));
@@ -5875,8 +5884,33 @@ mod tests {
             &provider,
             Some("workspace-shared"),
             Some(true),
+            false,
         )
         .expect("the selected account may pass through");
+    }
+
+    #[test]
+    fn rotation_anchor_accepts_a_separate_oauth_grant() {
+        let mut provider = test_provider_with_type(Some("codex_oauth"));
+        provider.category = Some("official".to_string());
+        provider.meta.as_mut().expect("provider meta").codex_rotation_pool = Some(true);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer hermes-oauth-grant"),
+        );
+        headers.insert(
+            "chatgpt-account-id",
+            HeaderValue::from_static("workspace-shared"),
+        );
+        validate_codex_official_authorization(
+            &headers,
+            &provider,
+            Some("workspace-shared"),
+            Some(false),
+            true,
+        )
+        .expect("the rotation anchor accepts another grant for the same account");
     }
 
     #[test]

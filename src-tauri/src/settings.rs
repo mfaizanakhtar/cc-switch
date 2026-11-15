@@ -411,6 +411,139 @@ impl CodexQuotaProtection {
     }
 }
 
+/// Account rotation pool for Codex.
+///
+/// Codex stays on one stable official anchor card. The proxy swaps the upstream
+/// account for each request according to this policy, so changing the serving
+/// account never rewrites `auth.json`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodexAccountRotation {
+    pub enabled: bool,
+    /// Provider id of the official Codex card whose login authenticates the client.
+    pub anchor_provider_id: String,
+    pub poll_seconds: u64,
+    pub fast_poll_seconds: u64,
+    pub near_cap_margin: u8,
+    pub manual_override_seconds: u64,
+    /// Human pause toggle from the UI.
+    pub manual_paused: bool,
+    pub accounts: Vec<CodexRotationAccount>,
+    pub heartbeat: CodexRotationHeartbeat,
+}
+
+impl Default for CodexAccountRotation {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            anchor_provider_id: String::new(),
+            poll_seconds: 120,
+            fast_poll_seconds: 30,
+            near_cap_margin: 10,
+            manual_override_seconds: 900,
+            manual_paused: false,
+            accounts: Vec::new(),
+            heartbeat: CodexRotationHeartbeat::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodexRotationAccount {
+    /// Local managed-account UUID from CC Switch's Codex OAuth manager.
+    pub account_id: String,
+    /// Login snapshot for display.
+    pub login: String,
+    pub priority: u8,
+    pub five_hour_min_remaining: u8,
+    pub weekly_min_remaining: u8,
+    pub heartbeat_eligible: bool,
+}
+
+impl Default for CodexRotationAccount {
+    fn default() -> Self {
+        Self {
+            account_id: String::new(),
+            login: String::new(),
+            priority: 1,
+            five_hour_min_remaining: 0,
+            weekly_min_remaining: 0,
+            heartbeat_eligible: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodexRotationHeartbeat {
+    pub enabled: bool,
+    /// "preferred" or a managed-account UUID.
+    pub target: String,
+    pub idle_minutes: u64,
+    pub repeat_minutes: u64,
+}
+
+impl Default for CodexRotationHeartbeat {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            target: "preferred".to_string(),
+            idle_minutes: 30,
+            repeat_minutes: 300,
+        }
+    }
+}
+
+impl CodexAccountRotation {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.poll_seconds < 5 || self.fast_poll_seconds < 5 {
+            return Err(AppError::Config(
+                "Codex rotation poll intervals must be at least 5 seconds".to_string(),
+            ));
+        }
+        if self.near_cap_margin > 100 {
+            return Err(AppError::Config(
+                "Codex rotation near-cap margin must be between 0 and 100".to_string(),
+            ));
+        }
+        if self.enabled && self.anchor_provider_id.trim().is_empty() {
+            return Err(AppError::Config(
+                "Codex rotation requires an anchor provider".to_string(),
+            ));
+        }
+        if self.heartbeat.enabled && (self.heartbeat.idle_minutes == 0 || self.heartbeat.repeat_minutes == 0) {
+            return Err(AppError::Config(
+                "Codex rotation heartbeat intervals must be at least 1 minute".to_string(),
+            ));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for account in &self.accounts {
+            if account.account_id.trim().is_empty() {
+                return Err(AppError::Config(
+                    "Codex rotation account id cannot be empty".to_string(),
+                ));
+            }
+            if !ids.insert(account.account_id.clone()) {
+                return Err(AppError::Config(
+                    "Codex rotation account ids must be unique".to_string(),
+                ));
+            }
+            if account.priority == 0 {
+                return Err(AppError::Config(
+                    "Codex rotation priority must be at least 1".to_string(),
+                ));
+            }
+            if account.five_hour_min_remaining > 100 || account.weekly_min_remaining > 100 {
+                return Err(AppError::Config(
+                    "Codex rotation remaining thresholds must be between 0 and 100".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// 用量金额的显示方式。只影响显示：库里的费用一律是美元，按 `exchange_rates`
 /// （或自动获取到的 `auto_exchange_rates`）换算后显示；值的合法性（认不认得币种、
 /// 汇率是否为正数）由前端兜底。
@@ -529,6 +662,9 @@ pub struct AppSettings {
     /// Pre-exhaustion protection for ChatGPT requests passing through the Codex proxy.
     #[serde(default)]
     pub codex_quota_protection: CodexQuotaProtection,
+    /// Multi-account rotation pool for Codex official requests.
+    #[serde(default)]
+    pub codex_account_rotation: CodexAccountRotation,
     /// Run official Codex providers under the shared "custom" model_provider id
     /// so official sessions share one resume-history bucket with third-party
     /// providers. Opt-in: defaults to false.
@@ -730,6 +866,7 @@ impl Default for AppSettings {
             native_tray_menu: false,
             preserve_codex_official_auth_on_switch: false,
             codex_quota_protection: CodexQuotaProtection::default(),
+            codex_account_rotation: CodexAccountRotation::default(),
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
             codex_stack_classic_tools: true,
@@ -1127,6 +1264,7 @@ pub fn get_settings_for_frontend() -> AppSettings {
 
 pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
     new_settings.codex_quota_protection.validate()?;
+    new_settings.codex_account_rotation.validate()?;
     new_settings.normalize_paths();
     save_settings_file(&new_settings)?;
 
@@ -1660,6 +1798,45 @@ mod tests {
         let saved = serde_json::to_value(&off).expect("serialize");
         assert_eq!(saved["codexStackClassicTools"], false);
         assert!(saved.get("codexStackClassicSubagents").is_none());
+    }
+
+    #[test]
+    fn codex_account_rotation_defaults_disabled_and_validates() {
+        let old: AppSettings = serde_json::from_value(serde_json::json!({})).expect("old settings");
+        assert!(!old.codex_account_rotation.enabled);
+        assert!(old.codex_account_rotation.accounts.is_empty());
+        assert!(old.codex_account_rotation.validate().is_ok());
+
+        let mut duplicate = CodexAccountRotation {
+            enabled: true,
+            anchor_provider_id: "anchor".to_string(),
+            accounts: vec![
+                CodexRotationAccount {
+                    account_id: "a".to_string(),
+                    login: "a@example.com".to_string(),
+                    ..Default::default()
+                },
+                CodexRotationAccount {
+                    account_id: "a".to_string(),
+                    login: "b@example.com".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(duplicate.validate().is_err());
+
+        duplicate.accounts[1].account_id = "b".to_string();
+        duplicate.accounts[1].five_hour_min_remaining = 101;
+        assert!(duplicate.validate().is_err());
+
+        duplicate.accounts[1].five_hour_min_remaining = 5;
+        duplicate.accounts[1].weekly_min_remaining = 0;
+        assert!(duplicate.validate().is_ok());
+
+        duplicate.heartbeat.enabled = true;
+        duplicate.heartbeat.idle_minutes = 0;
+        assert!(duplicate.validate().is_err());
     }
 
     #[test]

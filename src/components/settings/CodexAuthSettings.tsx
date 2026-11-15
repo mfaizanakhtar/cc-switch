@@ -7,6 +7,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { settingsApi } from "@/lib/api";
 import { formatBytes } from "@/components/settings/BackupStorageSection";
 import { CodexQuotaProtectionSettings } from "./CodexQuotaProtectionSettings";
+import { CodexAccountRotationSettings } from "./CodexAccountRotationSettings";
 
 interface CodexAuthSettingsProps {
   settings: SettingsFormState;
@@ -137,6 +138,7 @@ export function CodexAuthSettings({
   return (
     <>
       <CodexQuotaProtectionSettings settings={settings} onChange={onChange} />
+      <CodexAccountRotationSettings settings={settings} onChange={onChange} />
       <SettingsSwitchRow
         label={t("settings.preserveCodexOfficialAuthOnSwitch")}
         help={{

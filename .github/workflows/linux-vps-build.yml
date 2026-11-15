@@ -1,0 +1,61 @@
+name: Linux VPS build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, fix/manual-quota-reset]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-vps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Test pure rotation policy
+        run: python3 scripts/test-rotation-policy.py
+      - name: Build frontend
+        run: pnpm build:renderer
+      - name: Test integrated rotation module
+        run: cargo test --manifest-path src-tauri/Cargo.toml --release --lib services::codex_account_rotation::tests
+      - name: Build unsigned executable
+        run: pnpm tauri build --no-bundle
+      - name: Record build provenance
+        working-directory: src-tauri/target/release
+        run: |
+          printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT
+          sha256sum cc-switch > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-linux-x86_64-${{ github.sha }}
+          path: |
+            src-tauri/target/release/cc-switch
+            src-tauri/target/release/SOURCE_COMMIT
+            src-tauri/target/release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

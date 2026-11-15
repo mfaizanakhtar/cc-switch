@@ -132,6 +132,29 @@ pub struct ExhaustedUntil {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RotationRuntime {
     pub exhausted_until: HashMap<String, ExhaustedUntil>,
+    pub reset_confirmations: HashMap<String, ResetConfirmation>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResetConfirmation {
+    pub five_hour: Option<i64>,
+    pub weekly: Option<i64>,
+}
+
+// Only complete, successful readings can invalidate remembered exhaustion.
+// Space confirmations apart so a repeated decision on one poll cannot suffice.
+fn confirm_reset(until: &mut Option<i64>, first: &mut Option<i64>, used: f64, floor: u8, now: i64) {
+    if until.is_some_and(|reset| now >= reset) {
+        *until = None;
+    }
+    if until.is_none() || used >= 100.0 - f64::from(floor) {
+        *first = None;
+    } else if first.is_some_and(|seen| now.saturating_sub(seen) >= 5_000) {
+        *until = None;
+        *first = None;
+    } else if first.is_none() {
+        *first = Some(now);
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -150,6 +173,25 @@ pub fn choose_target(
     runtime: &mut RotationRuntime,
     now: i64,
 ) -> RotationDecision {
+    // Reconcile every account before priority selection, including windows that
+    // would otherwise be skipped because the five-hour window is blocked.
+    for account in &config.accounts {
+        let complete = usage.get(&account.account_id).and_then(|snapshot| {
+            let five = snapshot.five_hour_used?;
+            let weekly = snapshot.weekly_used?;
+            (five.is_finite() && weekly.is_finite()
+                && (0.0..=100.0).contains(&five) && (0.0..=100.0).contains(&weekly))
+                .then_some((five, weekly))
+        });
+        let Some((five, weekly)) = complete else {
+            runtime.reset_confirmations.remove(&account.account_id);
+            continue;
+        };
+        let exhausted = runtime.exhausted_until.entry(account.account_id.clone()).or_default();
+        let confirmation = runtime.reset_confirmations.entry(account.account_id.clone()).or_default();
+        confirm_reset(&mut exhausted.five_hour, &mut confirmation.five_hour, five, account.five_hour_min_remaining, now);
+        confirm_reset(&mut exhausted.weekly, &mut confirmation.weekly, weekly, account.weekly_min_remaining, now);
+    }
     let mut accounts: Vec<&CodexRotationAccount> = config.accounts.iter().collect();
     accounts.sort_by(|left, right| {
         left.priority
@@ -751,5 +793,62 @@ mod tests {
                 .as_deref(),
             Some("b")
         );
+    }
+
+    #[test]
+    fn manual_reset_needs_two_complete_readings_and_recovers_before_old_reset() {
+        let config = config(vec![account("a", 1, 5, 5)]);
+        let mut readings = HashMap::from([("a".to_string(), usage(100.0, 100.0))]);
+        let mut runtime = RotationRuntime::default();
+        assert!(choose_target(&config, &readings, &mut runtime, 0).paused);
+        // A real manual reset may have no active window/reset timestamp yet.
+        readings.insert("a".to_string(), UsageSnapshot {
+            five_hour_used: Some(0.0), weekly_used: Some(0.0), ..Default::default()
+        });
+        assert!(choose_target(&config, &readings, &mut runtime, 30_000).paused);
+        assert_eq!(choose_target(&config, &readings, &mut runtime, 60_000).target.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn failed_or_partial_reading_breaks_reset_confirmation() {
+        let config = config(vec![account("a", 1, 5, 5)]);
+        let mut readings = HashMap::from([("a".to_string(), usage(100.0, 100.0))]);
+        let mut runtime = RotationRuntime::default();
+        assert!(choose_target(&config, &readings, &mut runtime, 0).paused);
+        readings.insert("a".to_string(), usage(0.0, 0.0));
+        assert!(choose_target(&config, &readings, &mut runtime, 30_000).paused);
+        readings.insert("a".to_string(), UsageSnapshot::default());
+        assert!(choose_target(&config, &readings, &mut runtime, 60_000).paused);
+        readings.insert("a".to_string(), usage(0.0, 0.0));
+        assert!(choose_target(&config, &readings, &mut runtime, 90_000).paused);
+        assert_eq!(choose_target(&config, &readings, &mut runtime, 120_000).target.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn exhausted_reading_cancels_a_reset_candidate() {
+        let config = config(vec![account("a", 1, 5, 5)]);
+        let mut readings = HashMap::from([("a".to_string(), usage(100.0, 0.0))]);
+        let mut runtime = RotationRuntime::default();
+        assert!(choose_target(&config, &readings, &mut runtime, 0).paused);
+        readings.insert("a".to_string(), usage(0.0, 0.0));
+        assert!(choose_target(&config, &readings, &mut runtime, 30_000).paused);
+        readings.insert("a".to_string(), usage(100.0, 0.0));
+        assert!(choose_target(&config, &readings, &mut runtime, 60_000).paused);
+        readings.insert("a".to_string(), usage(0.0, 0.0));
+        assert!(choose_target(&config, &readings, &mut runtime, 90_000).paused);
+        // A duplicate decision on the same reading must not count twice.
+        assert!(choose_target(&config, &readings, &mut runtime, 90_000).paused);
+        assert_eq!(choose_target(&config, &readings, &mut runtime, 120_000).target.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn weekly_manual_reset_is_confirmed_independently() {
+        let config = config(vec![account("a", 1, 5, 5)]);
+        let mut readings = HashMap::from([("a".to_string(), usage(0.0, 100.0))]);
+        let mut runtime = RotationRuntime::default();
+        assert!(choose_target(&config, &readings, &mut runtime, 0).paused);
+        readings.insert("a".to_string(), usage(0.0, 0.0));
+        assert!(choose_target(&config, &readings, &mut runtime, 30_000).paused);
+        assert_eq!(choose_target(&config, &readings, &mut runtime, 60_000).target.as_deref(), Some("a"));
     }
 }

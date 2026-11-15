@@ -179,18 +179,38 @@ pub fn choose_target(
         let complete = usage.get(&account.account_id).and_then(|snapshot| {
             let five = snapshot.five_hour_used?;
             let weekly = snapshot.weekly_used?;
-            (five.is_finite() && weekly.is_finite()
-                && (0.0..=100.0).contains(&five) && (0.0..=100.0).contains(&weekly))
-                .then_some((five, weekly))
+            (five.is_finite()
+                && weekly.is_finite()
+                && (0.0..=100.0).contains(&five)
+                && (0.0..=100.0).contains(&weekly))
+            .then_some((five, weekly))
         });
         let Some((five, weekly)) = complete else {
             runtime.reset_confirmations.remove(&account.account_id);
             continue;
         };
-        let exhausted = runtime.exhausted_until.entry(account.account_id.clone()).or_default();
-        let confirmation = runtime.reset_confirmations.entry(account.account_id.clone()).or_default();
-        confirm_reset(&mut exhausted.five_hour, &mut confirmation.five_hour, five, account.five_hour_min_remaining, now);
-        confirm_reset(&mut exhausted.weekly, &mut confirmation.weekly, weekly, account.weekly_min_remaining, now);
+        let exhausted = runtime
+            .exhausted_until
+            .entry(account.account_id.clone())
+            .or_default();
+        let confirmation = runtime
+            .reset_confirmations
+            .entry(account.account_id.clone())
+            .or_default();
+        confirm_reset(
+            &mut exhausted.five_hour,
+            &mut confirmation.five_hour,
+            five,
+            account.five_hour_min_remaining,
+            now,
+        );
+        confirm_reset(
+            &mut exhausted.weekly,
+            &mut confirmation.weekly,
+            weekly,
+            account.weekly_min_remaining,
+            now,
+        );
     }
     let mut accounts: Vec<&CodexRotationAccount> = config.accounts.iter().collect();
     accounts.sort_by(|left, right| {
@@ -262,7 +282,9 @@ pub fn choose_target(
             }
         }
 
-        runtime.exhausted_until.insert(account.account_id.clone(), exhausted);
+        runtime
+            .exhausted_until
+            .insert(account.account_id.clone(), exhausted);
         if !blocked {
             return RotationDecision {
                 target: Some(account.account_id.clone()),
@@ -396,10 +418,7 @@ pub(crate) async fn run_once(app: &tauri::AppHandle) -> Result<u64, String> {
         return Ok(poll_seconds);
     }
 
-    let oauth_status = state
-        .codex_oauth_manager
-        .get_status()
-        .await;
+    let oauth_status = state.codex_oauth_manager.get_status().await;
     let oauth_accounts: HashMap<String, (String, bool)> = oauth_status
         .accounts
         .into_iter()
@@ -435,12 +454,20 @@ pub(crate) async fn run_once(app: &tauri::AppHandle) -> Result<u64, String> {
             }
         };
         if let Some(used) = snapshot.five_hour_used {
-            if used >= 100.0 - f64::from(account.five_hour_min_remaining) - f64::from(config.near_cap_margin) {
+            if used
+                >= 100.0
+                    - f64::from(account.five_hour_min_remaining)
+                    - f64::from(config.near_cap_margin)
+            {
                 near_cap = true;
             }
         }
         if let Some(used) = snapshot.weekly_used {
-            if used >= 100.0 - f64::from(account.weekly_min_remaining) - f64::from(config.near_cap_margin) {
+            if used
+                >= 100.0
+                    - f64::from(account.weekly_min_remaining)
+                    - f64::from(config.near_cap_margin)
+            {
                 near_cap = true;
             }
         }
@@ -610,9 +637,7 @@ async fn maybe_heartbeat(
     match tokio::time::timeout(Duration::from_secs(120), command.status()).await {
         Ok(Ok(status)) if status.success() => {
             LAST_HEARTBEAT_AT.store(now, Ordering::SeqCst);
-            log::info!(
-                "[CodexRotation] heartbeat started a window for serving account {selected}"
-            );
+            log::info!("[CodexRotation] heartbeat started a window for serving account {selected}");
         }
         Ok(Ok(status)) => {
             // Retry sooner than a full repeat interval after a failure.
@@ -802,11 +827,21 @@ mod tests {
         let mut runtime = RotationRuntime::default();
         assert!(choose_target(&config, &readings, &mut runtime, 0).paused);
         // A real manual reset may have no active window/reset timestamp yet.
-        readings.insert("a".to_string(), UsageSnapshot {
-            five_hour_used: Some(0.0), weekly_used: Some(0.0), ..Default::default()
-        });
+        readings.insert(
+            "a".to_string(),
+            UsageSnapshot {
+                five_hour_used: Some(0.0),
+                weekly_used: Some(0.0),
+                ..Default::default()
+            },
+        );
         assert!(choose_target(&config, &readings, &mut runtime, 30_000).paused);
-        assert_eq!(choose_target(&config, &readings, &mut runtime, 60_000).target.as_deref(), Some("a"));
+        assert_eq!(
+            choose_target(&config, &readings, &mut runtime, 60_000)
+                .target
+                .as_deref(),
+            Some("a")
+        );
     }
 
     #[test]
@@ -821,7 +856,12 @@ mod tests {
         assert!(choose_target(&config, &readings, &mut runtime, 60_000).paused);
         readings.insert("a".to_string(), usage(0.0, 0.0));
         assert!(choose_target(&config, &readings, &mut runtime, 90_000).paused);
-        assert_eq!(choose_target(&config, &readings, &mut runtime, 120_000).target.as_deref(), Some("a"));
+        assert_eq!(
+            choose_target(&config, &readings, &mut runtime, 120_000)
+                .target
+                .as_deref(),
+            Some("a")
+        );
     }
 
     #[test]
@@ -838,7 +878,12 @@ mod tests {
         assert!(choose_target(&config, &readings, &mut runtime, 90_000).paused);
         // A duplicate decision on the same reading must not count twice.
         assert!(choose_target(&config, &readings, &mut runtime, 90_000).paused);
-        assert_eq!(choose_target(&config, &readings, &mut runtime, 120_000).target.as_deref(), Some("a"));
+        assert_eq!(
+            choose_target(&config, &readings, &mut runtime, 120_000)
+                .target
+                .as_deref(),
+            Some("a")
+        );
     }
 
     #[test]
@@ -849,6 +894,11 @@ mod tests {
         assert!(choose_target(&config, &readings, &mut runtime, 0).paused);
         readings.insert("a".to_string(), usage(0.0, 0.0));
         assert!(choose_target(&config, &readings, &mut runtime, 30_000).paused);
-        assert_eq!(choose_target(&config, &readings, &mut runtime, 60_000).target.as_deref(), Some("a"));
+        assert_eq!(
+            choose_target(&config, &readings, &mut runtime, 60_000)
+                .target
+                .as_deref(),
+            Some("a")
+        );
     }
 }

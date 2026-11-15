@@ -384,10 +384,12 @@ pub(crate) async fn run_once(app: &tauri::AppHandle) -> Result<u64, String> {
     }
 
     let state = app.state::<AppState>();
-    let current_provider = state
-        .db
-        .get_current_provider("codex")
-        .map_err(|error| format!("读取 Codex 当前供应商失败: {error}"))?;
+    let current_provider = crate::mode::current::provider_for(
+        state.db.as_ref(),
+        &crate::app_config::AppType::Codex,
+        crate::mode::current::Purpose::Direct,
+    )
+    .map_err(|error| format!("读取 Codex 当前供应商失败: {error}"))?;
     let providers = state
         .db
         .get_all_providers("codex")

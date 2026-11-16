@@ -512,7 +512,9 @@ impl CodexAccountRotation {
                 "Codex rotation requires an anchor provider".to_string(),
             ));
         }
-        if self.heartbeat.enabled && (self.heartbeat.idle_minutes == 0 || self.heartbeat.repeat_minutes == 0) {
+        if self.heartbeat.enabled
+            && (self.heartbeat.idle_minutes == 0 || self.heartbeat.repeat_minutes == 0)
+        {
             return Err(AppError::Config(
                 "Codex rotation heartbeat intervals must be at least 1 minute".to_string(),
             ));

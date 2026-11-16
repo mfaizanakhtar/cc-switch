@@ -110,17 +110,13 @@ export function CodexAccountRotationSettings({
   );
 
   const addable = managed.filter(
-    (account) =>
-      !draft.accounts.some((rule) => rule.accountId === account.id),
+    (account) => !draft.accounts.some((rule) => rule.accountId === account.id),
   );
 
   const update = (patch: Partial<CodexAccountRotation>) =>
     setDraft((current) => ({ ...current, ...patch }));
 
-  const updateAccount = (
-    index: number,
-    patch: Partial<CodexRotationAccount>,
-  ) =>
+  const updateAccount = (index: number, patch: Partial<CodexRotationAccount>) =>
     setDraft((current) => ({
       ...current,
       accounts: current.accounts.map((account, position) =>
@@ -303,10 +299,18 @@ export function CodexAccountRotationSettings({
               </div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="outline" size="compact" onClick={() => void runNow()}>
+              <Button
+                variant="outline"
+                size="compact"
+                onClick={() => void runNow()}
+              >
                 Run now
               </Button>
-              <Button variant="outline" size="compact" onClick={() => void togglePause()}>
+              <Button
+                variant="outline"
+                size="compact"
+                onClick={() => void togglePause()}
+              >
                 {status?.manualPaused ? "Resume" : "Pause"}
               </Button>
               {status?.accounts.length ? (
@@ -393,7 +397,13 @@ export function CodexAccountRotationSettings({
                       </div>
                       <div className="mt-2 grid gap-2 text-caption text-fg-2 sm:grid-cols-2">
                         <div>
-                          <div>5h: {remaining(live?.fiveHourUsed, account.fiveHourMinRemaining)}</div>
+                          <div>
+                            5h:{" "}
+                            {remaining(
+                              live?.fiveHourUsed,
+                              account.fiveHourMinRemaining,
+                            )}
+                          </div>
                           <Input
                             type="number"
                             min={0}
@@ -401,14 +411,20 @@ export function CodexAccountRotationSettings({
                             value={account.fiveHourMinRemaining}
                             onChange={(event) =>
                               updateAccount(index, {
-                                fiveHourMinRemaining: clampPercent(event.target.value),
+                                fiveHourMinRemaining: clampPercent(
+                                  event.target.value,
+                                ),
                               })
                             }
                           />
                         </div>
                         <div>
                           <div>
-                            Weekly: {remaining(live?.weeklyUsed, account.weeklyMinRemaining)}
+                            Weekly:{" "}
+                            {remaining(
+                              live?.weeklyUsed,
+                              account.weeklyMinRemaining,
+                            )}
                           </div>
                           <Input
                             type="number"
@@ -417,7 +433,9 @@ export function CodexAccountRotationSettings({
                             value={account.weeklyMinRemaining}
                             onChange={(event) =>
                               updateAccount(index, {
-                                weeklyMinRemaining: clampPercent(event.target.value),
+                                weeklyMinRemaining: clampPercent(
+                                  event.target.value,
+                                ),
                               })
                             }
                           />
@@ -434,8 +452,8 @@ export function CodexAccountRotationSettings({
                         <span>Allow idle heartbeat on this account</span>
                       </div>
                       <div className="mt-1 text-caption text-fg-2">
-                        5h reset {formatTime(live?.fiveHourReset)} · weekly reset{" "}
-                        {formatTime(live?.weeklyReset)}
+                        5h reset {formatTime(live?.fiveHourReset)} · weekly
+                        reset {formatTime(live?.weeklyReset)}
                       </div>
                     </div>
                   );
@@ -484,7 +502,10 @@ export function CodexAccountRotationSettings({
                       update({
                         heartbeat: {
                           ...draft.heartbeat,
-                          idleMinutes: Math.max(1, Number(event.target.value) || 1),
+                          idleMinutes: Math.max(
+                            1,
+                            Number(event.target.value) || 1,
+                          ),
                         },
                       })
                     }
@@ -500,7 +521,10 @@ export function CodexAccountRotationSettings({
                       update({
                         heartbeat: {
                           ...draft.heartbeat,
-                          repeatMinutes: Math.max(1, Number(event.target.value) || 1),
+                          repeatMinutes: Math.max(
+                            1,
+                            Number(event.target.value) || 1,
+                          ),
                         },
                       })
                     }
@@ -520,7 +544,9 @@ export function CodexAccountRotationSettings({
                       })
                     }
                   >
-                    <option value="preferred">Preferred eligible account</option>
+                    <option value="preferred">
+                      Preferred eligible account
+                    </option>
                     {draft.accounts.map((account) => (
                       <option key={account.accountId} value={account.accountId}>
                         {account.login}

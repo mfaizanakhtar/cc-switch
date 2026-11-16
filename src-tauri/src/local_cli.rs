@@ -54,10 +54,12 @@ fn response(app: &tauri::AppHandle, request: &Value) -> Result<Value, String> {
                 .db
                 .get_all_providers("codex")
                 .map_err(|e| e.to_string())?;
-            let current = state
-                .db
-                .get_current_provider("codex")
-                .map_err(|e| e.to_string())?;
+            let current = crate::mode::current::provider_for(
+                state.db.as_ref(),
+                &AppType::Codex,
+                crate::mode::current::Purpose::Direct,
+            )
+            .map_err(|e| e.to_string())?;
             let mode = crate::mode::current::mode_state(&AppType::Codex);
             let in_use = crate::mode::current::provider_for(
                 state.db.as_ref(),
@@ -142,8 +144,7 @@ fn response(app: &tauri::AppHandle, request: &Value) -> Result<Value, String> {
             let paused = request.get("op").and_then(Value::as_str) == Some("rotation-pause");
             let mut settings = crate::settings::get_settings();
             settings.codex_account_rotation.manual_paused = paused;
-            crate::settings::update_settings(settings)
-                .map_err(|error| error.to_string())?;
+            crate::settings::update_settings(settings).map_err(|error| error.to_string())?;
             let _ = tauri::async_runtime::block_on(
                 crate::services::codex_account_rotation::run_once(app),
             );

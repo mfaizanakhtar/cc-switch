@@ -4,9 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager};
 
-use crate::services::codex_account_rotation::{
-    self, RotationStatus,
-};
+use crate::services::codex_account_rotation::{self, RotationStatus};
 use crate::settings;
 use crate::store::AppState;
 
@@ -56,8 +54,8 @@ pub async fn set_codex_rotation_serving_account(
             return Err("That account is not in the rotation pool".to_string());
         }
     }
-    let until = now_millis()
-        + (current.codex_account_rotation.manual_override_seconds as i64) * 1000;
+    let until =
+        now_millis() + (current.codex_account_rotation.manual_override_seconds as i64) * 1000;
     codex_account_rotation::set_manual_account(account_id, until);
     codex_account_rotation::run_once(&app).await?;
     Ok(codex_account_rotation::status())

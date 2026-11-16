@@ -1462,7 +1462,8 @@ impl RequestForwarder {
         let mut quota_token: Option<String> = None;
         let mut codex_oauth_account_id: Option<String> = None;
 
-        let rotation_provider = crate::services::codex_account_rotation::is_rotation_provider(provider);
+        let rotation_provider =
+            crate::services::codex_account_rotation::is_rotation_provider(provider);
         let rotation_selected = if codex_official_auth_passthrough && rotation_provider {
             crate::services::codex_account_rotation::selected_account_id()
         } else {
@@ -1472,7 +1473,8 @@ impl RequestForwarder {
         let mut rotation_token: Option<String> = None;
 
         if codex_official_auth_passthrough {
-            let _rotation_activity = crate::services::codex_account_rotation::ActivityGuard::start();
+            let _rotation_activity =
+                crate::services::codex_account_rotation::ActivityGuard::start();
             let (expected_chatgpt_account_id, managed_session_matches) = match provider
                 .meta
                 .as_ref()
@@ -2593,9 +2595,7 @@ impl RequestForwarder {
                     && key_str.eq_ignore_ascii_case("authorization")
                 {
                     if let Some(token) = rotation_token.as_deref() {
-                        if let Ok(value) =
-                            http::HeaderValue::from_str(&format!("Bearer {token}"))
-                        {
+                        if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {token}")) {
                             saw_auth = true;
                             ordered_headers.append(key.clone(), value);
                             continue;
@@ -5893,7 +5893,11 @@ mod tests {
     fn rotation_anchor_accepts_a_separate_oauth_grant() {
         let mut provider = test_provider_with_type(Some("codex_oauth"));
         provider.category = Some("official".to_string());
-        provider.meta.as_mut().expect("provider meta").codex_rotation_pool = Some(true);
+        provider
+            .meta
+            .as_mut()
+            .expect("provider meta")
+            .codex_rotation_pool = Some(true);
         let mut headers = HeaderMap::new();
         headers.insert(
             http::header::AUTHORIZATION,

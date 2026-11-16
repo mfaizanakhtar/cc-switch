@@ -22,6 +22,15 @@ const setCompressionMock = vi.fn();
 const diskUsageMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
+  codexRotationApi: {
+    status: vi.fn().mockResolvedValue(null),
+  },
+  authApi: {
+    authGetStatus: vi.fn().mockResolvedValue({ accounts: [] }),
+  },
+  providersApi: {
+    getAll: vi.fn().mockResolvedValue({}),
+  },
   settingsApi: {
     codexForcesMultiAgentV2: () => forcesMultiAgentV2Mock(),
     hasCodexUnifyHistoryBackup: vi.fn().mockResolvedValue(false),
